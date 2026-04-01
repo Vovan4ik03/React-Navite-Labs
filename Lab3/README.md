@@ -123,10 +123,14 @@ export default function SettingsScreen() {
 ---
 
 ## Скріншоти
+###Kliker moved
 ![Kliker move](image.png)
+###Double klik
 ![Double klik](image-1.png)
+###Dark Theme
 ![Dark Theme](image-2.png)
 ![Dark Theme-2](image-3.png)
+###Task page
 ![Task page](image-4.png)
 ---
 

@@ -110,7 +110,7 @@ const onRefresh = async () => {
 ### Головний екран
 ![Main](assets/images/main.jpg)
 ![Folder](assets/images/otherfolder.jpg)
-![Info](assets/images/info.jpg)
+![Info](assets/images/info1.jpg)
 ### Створення файлу 
 ![Folder](assets/images/createfile.jpg)
 ### Редагування файлу

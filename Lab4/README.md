@@ -26,57 +26,96 @@ npx expo start --tunnel
 Project/
 │
 ├── screens/
-│   ├── HomeScreen.js         # головний екран
+│   └── HomeScreen.js
 │
 ├── styles/
-│   └── HomeStyles.js       # стилі
+│   └── HomeStyles.js
 │
+├── components/
+│   ├── CreateFileModal.js
+|   ├── CreateFolderModal.js
+|   ├── EditFileModal.js
+|   ├── InfoModal.js
+|   ├── ItemRow.js
+|   ├── MemoryCard.js
+|   └── PathBar.js
+| 
 ├── utils/
-│   └── storage.js              #розмір пам'яті пристрою
+│   └── storage.js
 ├── app/
-    └── App.js              # Список завданнь
+    └── App.js
 ```
 ---
 ## Опис функціоналу
 
-SaveFile - збереження файлу
+handleCreate - cтворення файлу 
 ```
-const saveFile = async () => {
-    await FileSystem.writeAsStringAsync(currentFile, fileContent);
-    setEditorModal(false);
-    loadDir();
+const handleCreate = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const fileName = trimmed.endsWith('.txt') ? trimmed : trimmed + '.txt';
+
+    onSubmit(fileName, content);
+    setName('');
+    setContent('');
+  };
+
+  const handleClose = () => {
+    setName('');
+    setContent('');
+    onClose();
   };
 ```
 
-OpenItem - ця функція робить відкриття файлу і папки, для редагування інформації 
+InfoModal - перегляд інформації файла 
 ```
-const openItem = async (item) => {
-    if (item.isDirectory) {
-      setCurrentDir(item.uri + '/');
-    } else {
-      const content = await FileSystem.readAsStringAsync(item.uri);
-      setCurrentFile(item.uri);
-      setFileContent(content);
-      setEditorModal(true);
+export default function InfoModal({ visible, item, onClose }) {
+  if (!item) return null;
+}
+```
+
+onRefresh - відображення розміру пам'яті пристроя
+```
+const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const total = await FileSystem.getTotalDiskCapacityAsync();
+      const free = await FileSystem.getFreeDiskStorageAsync();
+
+      setMemory({
+        total: formatBytes(total),
+        free: formatBytes(free),
+        used: formatBytes(total - free),
+      });
+
+      const data = await readDirectory(currentDir);
+      setItems(data);
+    } finally {
+      setRefreshing(false);
     }
   };
-```
 
-LoadStorage - відображення розміру пам'яті пристроя
-```
- const loadStorage = async () => {
-    const data = await getStorageInfo();
-    setStorage(data);
-  };
 ```
 ---
+## Реалізований функціонал
 
+- Загальна інформація пам'яті пристроя
+- Видалення і редагування файлів
+- Перегляд інформації файлів і папок
+- Зручний інтерфейс
+---
 ## Скріншоти
 
 ### Головний екран
-![Main](assets/images/Main.jpg)
-### Інформація про файл
+![Main](assets/images/main.jpg)
+![Folder](assets/images/otherfolder.jpg)
 ![Info](assets/images/info.jpg)
-### Створення папки 
-![Folder](assets/images/createFolder.jpg)
+### Створення файлу 
+![Folder](assets/images/createfile.jpg)
+### Редагування файлу
+![File](assets/images/editfile.jpg)
+![File](assets/images/editfile1.jpg)
+
+
 

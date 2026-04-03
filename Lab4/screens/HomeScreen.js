@@ -1,300 +1,383 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
   Alert,
-  Modal,
-  TextInput,
+  FlatList,
+  RefreshControl,
   SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-
 import * as FileSystem from 'expo-file-system/legacy';
-import styles from '../styles/homeStyles';
-import { getStorageInfo, formatBytes } from '../utils/storage';
 
-const ROOT = FileSystem.documentDirectory;
+import PathBar from '../components/PathBar';
+import MemoryCard from '../components/MemoryCard';
+import ItemRow from '../components/ItemRow';
+import CreateFolderModal from '../components/CreateFolderModal';
+import CreateFileModal from '../components/CreateFileModal';
+import EditFileModal from '../components/EditFileModal';
+import InfoModal from '../components/InfoModal';
+
+import { colors } from '../styles/homeStyles';
+import {
+  ensureRootExists,
+  formatBytes,
+  getParentDirectory,
+  getRelativePath,
+  readDirectory,
+  ROOT_DIR,
+} from '../utils/storage';
 
 export default function HomeScreen() {
-  const [currentDir, setCurrentDir] = useState(ROOT);
+  const [currentDir, setCurrentDir] = useState(ROOT_DIR);
   const [items, setItems] = useState([]);
-  const [storage, setStorage] = useState(null);
+  const [memory, setMemory] = useState({ total: '—', free: '—', used: '—' });
 
-  const [folderModal, setFolderModal] = useState(false);
-  const [fileModal, setFileModal] = useState(false);
-  const [editorModal, setEditorModal] = useState(false);
+  const [folderModalVisible, setFolderModalVisible] = useState(false);
+  const [fileModalVisible, setFileModalVisible] = useState(false);
 
-  const [folderName, setFolderName] = useState('');
-  const [fileName, setFileName] = useState('');
-  const [fileContent, setFileContent] = useState('');
+  const [infoVisible, setInfoVisible] = useState(false);
+  const [selectedItem, setSelectedItem] = useState(null);
 
-  const [currentFile, setCurrentFile] = useState('');
+  const [editVisible, setEditVisible] = useState(false);
+  const [editingFile, setEditingFile] = useState(null);
+  const [editingText, setEditingText] = useState('');
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const canGoUp = useMemo(() => currentDir !== ROOT_DIR, [currentDir]);
 
   useEffect(() => {
-    loadDir();
-    loadStorage();
+    let mounted = true;
+
+    const init = async () => {
+      try {
+        await ensureRootExists();
+
+        const total = await FileSystem.getTotalDiskCapacityAsync();
+        const free = await FileSystem.getFreeDiskStorageAsync();
+
+        if (!mounted) return;
+
+        setMemory({
+          total: formatBytes(total),
+          free: formatBytes(free),
+          used: formatBytes(total - free),
+        });
+
+        const data = await readDirectory(ROOT_DIR);
+        if (mounted) setItems(data);
+      } catch (e) {
+        Alert.alert('Помилка', e.message);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    init();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const load = async () => {
+      try {
+        const data = await readDirectory(currentDir);
+        if (mounted) setItems(data);
+      } catch (e) {
+        Alert.alert('Помилка читання', e.message);
+      }
+    };
+
+    load();
+
+    return () => {
+      mounted = false;
+    };
   }, [currentDir]);
 
-  const loadStorage = async () => {
-    const data = await getStorageInfo();
-    setStorage(data);
-  };
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const total = await FileSystem.getTotalDiskCapacityAsync();
+      const free = await FileSystem.getFreeDiskStorageAsync();
 
-  const loadDir = async () => {
-    const files = await FileSystem.readDirectoryAsync(currentDir);
+      setMemory({
+        total: formatBytes(total),
+        free: formatBytes(free),
+        used: formatBytes(total - free),
+      });
 
-    const detailed = await Promise.all(
-      files.map(async (name) => {
-        const uri = currentDir + name;
-        const info = await FileSystem.getInfoAsync(uri, { size: true });
-
-        return {
-          name,
-          uri,
-          isDirectory: info.isDirectory,
-          size: info.size || 0,
-          modificationTime: info.modificationTime,
-        };
-      })
-    );
-
-    detailed.sort((a, b) => {
-      if (a.isDirectory && !b.isDirectory) return -1;
-      if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    setItems(detailed);
-  };
-
-  const goUp = () => {
-    if (currentDir === ROOT) return;
-    const parent = currentDir.split('/').slice(0, -2).join('/') + '/';
-    setCurrentDir(parent);
-  };
-
-  const openItem = async (item) => {
-    if (item.isDirectory) {
-      setCurrentDir(item.uri + '/');
-    } else {
-      const content = await FileSystem.readAsStringAsync(item.uri);
-      setCurrentFile(item.uri);
-      setFileContent(content);
-      setEditorModal(true);
+      const data = await readDirectory(currentDir);
+      setItems(data);
+    } finally {
+      setRefreshing(false);
     }
   };
 
-  const saveFile = async () => {
-    await FileSystem.writeAsStringAsync(currentFile, fileContent);
-    setEditorModal(false);
-    loadDir();
+  const handleOpen = async (item) => {
+    if (item.isDirectory) {
+      setCurrentDir(item.uri.endsWith('/') ? item.uri : `${item.uri}/`);
+      return;
+    }
+
+    if (item.extension !== 'txt') {
+      Alert.alert('Увага', 'Для перегляду та редагування підтримуються тільки .txt файли.');
+      return;
+    }
+
+    try {
+      const content = await FileSystem.readAsStringAsync(item.uri);
+      setEditingFile(item);
+      setEditingText(content);
+      setEditVisible(true);
+    } catch (e) {
+      Alert.alert('Помилка відкриття', e.message);
+    }
   };
 
-  const createFolder = async () => {
-    if (!folderName.trim()) return;
-
-    await FileSystem.makeDirectoryAsync(currentDir + folderName);
-    setFolderName('');
-    setFolderModal(false);
-    loadDir();
+  const handleGoUp = () => {
+    if (!canGoUp) return;
+    setCurrentDir(getParentDirectory(currentDir));
   };
 
-  const createFile = async () => {
-    if (!fileName.trim()) return;
-
-    const name = fileName.endsWith('.txt')
-      ? fileName
-      : fileName + '.txt';
-
-    await FileSystem.writeAsStringAsync(
-      currentDir + name,
-      fileContent || ''
-    );
-
-    setFileName('');
-    setFileContent('');
-    setFileModal(false);
-    loadDir();
+  const handleCreateFolder = async (name) => {
+    try {
+      await FileSystem.makeDirectoryAsync(`${currentDir}${name}`, {
+        intermediates: true,
+      });
+      setFolderModalVisible(false);
+      onRefresh();
+    } catch (e) {
+      Alert.alert('Помилка', e.message);
+    }
   };
 
-  const deleteItem = (item) => {
-    Alert.alert('Delete', item.name, [
-      { text: 'Cancel' },
+  const handleCreateFile = async (name, content) => {
+    try {
+      const fileName = name.endsWith('.txt') ? name : `${name}.txt`;
+      await FileSystem.writeAsStringAsync(`${currentDir}${fileName}`, content || '');
+      setFileModalVisible(false);
+      onRefresh();
+    } catch (e) {
+      Alert.alert('Помилка', e.message);
+    }
+  };
+
+  const handleSaveFile = async (text) => {
+    try {
+      await FileSystem.writeAsStringAsync(editingFile.uri, text);
+      setEditVisible(false);
+      setEditingFile(null);
+      setEditingText('');
+      onRefresh();
+    } catch (e) {
+      Alert.alert('Помилка збереження', e.message);
+    }
+  };
+
+  const handleDelete = (item) => {
+    Alert.alert('Підтвердження', `Видалити "${item.name}"?`, [
+      { text: 'Скасувати', style: 'cancel' },
       {
-        text: 'OK',
+        text: 'Видалити',
+        style: 'destructive',
         onPress: async () => {
-          await FileSystem.deleteAsync(item.uri);
-          loadDir();
+          try {
+            await FileSystem.deleteAsync(item.uri, { idempotent: true });
+            onRefresh();
+          } catch (e) {
+            Alert.alert('Помилка видалення', e.message);
+          }
         },
       },
     ]);
   };
 
-  const showInfo = (item) => {
-    Alert.alert(
-      'Info',
-      `Name: ${item.name}
-Type: ${item.isDirectory ? 'Folder' : 'File'}
-Size: ${formatBytes(item.size)}
-Modified: ${new Date(item.modificationTime * 1000)}`
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>File Manager</Text>
+      <StatusBar barStyle="light-content" />
 
-      {/* STORAGE */}
-      {storage && (
-        <View style={styles.storageCard}>
-          <Text>Total: {formatBytes(storage.total)}</Text>
-          <Text>Used: {formatBytes(storage.used)}</Text>
-          <Text>Free: {formatBytes(storage.free)}</Text>
-        </View>
-      )}
-
-      {/* PATH */}
-      <View style={styles.pathCard}>
-        <Text numberOfLines={2}>{currentDir}</Text>
+      <View style={styles.top}>
+        <Text style={styles.title}>Файловий менеджер</Text>
       </View>
 
-      {/* BUTTONS */}
-      <View style={styles.topButtonsRow}>
-        <TouchableOpacity style={styles.upButton} onPress={goUp}>
-          <Text style={styles.actionButtonText}>⬆ Up</Text>
-        </TouchableOpacity>
+      <MemoryCard {...memory} />
 
-        <TouchableOpacity
-          style={styles.folderButton}
-          onPress={() => setFolderModal(true)}
-        >
-          <Text style={styles.actionButtonText}>📁 Folder</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.fileButton}
-          onPress={() => setFileModal(true)}
-        >
-          <Text style={styles.actionButtonText}>📄 File</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* LIST */}
-      <FlatList
-        data={items}
-        keyExtractor={(item) => item.uri}
-        renderItem={({ item }) => (
-          <View style={styles.itemCard}>
-            <TouchableOpacity
-              style={styles.itemMain}
-              onPress={() => openItem(item)}
-            >
-              <Text style={styles.itemIcon}>
-                {item.isDirectory ? '📁' : '📄'}
-              </Text>
-
-              <View>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemMeta}>
-                  {item.isDirectory
-                    ? 'Folder'
-                    : formatBytes(item.size)}
-                </Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={styles.itemActions}>
-              <TouchableOpacity
-                style={styles.infoButton}
-                onPress={() => showInfo(item)}
-              >
-                <Text style={styles.smallButtonText}>Info</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.deleteButton}
-                onPress={() => deleteItem(item)}
-              >
-                <Text style={styles.smallButtonText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
+      <PathBar
+        currentPath={getRelativePath(currentDir)}
+        onGoUp={handleGoUp}
+        canGoUp={canGoUp}
       />
 
-      {/* CREATE FOLDER */}
-      <Modal visible={folderModal} transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text>Create Folder</Text>
-              <TouchableOpacity onPress={() => setFolderModal(false)}>
-                <Text>❌</Text>
-              </TouchableOpacity>
-            </View>
+      <View style={styles.actionsRow}>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.folderButton]}
+          onPress={() => setFolderModalVisible(true)}
+        >
+          <Text style={styles.actionText}>📁 Нова папка</Text>
+        </TouchableOpacity>
 
-            <TextInput
-              style={styles.input}
-              value={folderName}
-              onChangeText={setFolderName}
-            />
+        <TouchableOpacity
+          style={[styles.actionButton, styles.fileButton]}
+          onPress={() => setFileModalVisible(true)}
+        >
+          <Text style={styles.actionText}>📄 Новий файл</Text>
+        </TouchableOpacity>
+      </View>
 
-            <TouchableOpacity style={styles.confirmBtn} onPress={createFolder}>
-              <Text style={{ color: '#fff' }}>Create</Text>
-            </TouchableOpacity>
-          </View>
+      <View style={styles.listHeader}>
+        <Text style={styles.listTitle}>Вміст директорії</Text>
+        <Text style={styles.listCount}>{items.length}</Text>
+      </View>
+
+      {loading ? (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyText}>Завантаження...</Text>
         </View>
-      </Modal>
-
-      {/* CREATE FILE */}
-      <Modal visible={fileModal} transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text>Create File</Text>
-              <TouchableOpacity onPress={() => setFileModal(false)}>
-                <Text>❌</Text>
-              </TouchableOpacity>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(item) => item.uri}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />}
+          contentContainerStyle={items.length === 0 ? styles.emptyContainer : styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyText}>Папка порожня</Text>
+              <Text style={styles.emptySubtext}>Створи нову папку або .txt файл</Text>
             </View>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Name"
-              value={fileName}
-              onChangeText={setFileName}
+          }
+          renderItem={({ item }) => (
+            <ItemRow
+              item={item}
+              onOpen={handleOpen}
+              onDelete={handleDelete}
+              onInfo={(i) => {
+                setSelectedItem(i);
+                setInfoVisible(true);
+              }}
+              onEdit={handleOpen}
             />
+          )}
+        />
+      )}
 
-            <TextInput
-              style={styles.input}
-              placeholder="Content"
-              value={fileContent}
-              onChangeText={setFileContent}
-              multiline
-            />
+      <CreateFolderModal
+        visible={folderModalVisible}
+        onClose={() => setFolderModalVisible(false)}
+        onSubmit={handleCreateFolder}
+      />
 
-            <TouchableOpacity style={styles.confirmBtn} onPress={createFile}>
-              <Text style={{ color: '#fff' }}>Create</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <CreateFileModal
+        visible={fileModalVisible}
+        onClose={() => setFileModalVisible(false)}
+        onSubmit={handleCreateFile}
+      />
 
-      {/* EDITOR */}
-      <Modal visible={editorModal}>
-        <SafeAreaView style={styles.editorContainer}>
-          <TextInput
-            style={styles.editorInput}
-            multiline
-            value={fileContent}
-            onChangeText={setFileContent}
-          />
+      <EditFileModal
+        visible={editVisible}
+        fileName={editingFile?.name}
+        initialValue={editingText}
+        onClose={() => setEditVisible(false)}
+        onSave={handleSaveFile}
+      />
 
-          <TouchableOpacity style={styles.confirmBtn} onPress={saveFile}>
-            <Text style={{ color: '#fff' }}>Save</Text>
-          </TouchableOpacity>
-        </SafeAreaView>
-      </Modal>
+      <InfoModal
+        visible={infoVisible}
+        item={selectedItem}
+        onClose={() => setInfoVisible(false)}
+      />
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+  },
+  top: {
+    marginBottom: 14,
+  },
+  title: {
+    color: colors.text,
+    fontSize: 30,
+    fontWeight: '800',
+  },
+  subtitle: {
+    color: colors.muted,
+    marginTop: 4,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  actionButton: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  folderButton: {
+    backgroundColor: colors.greenDark,
+  },
+  fileButton: {
+    backgroundColor: colors.blueDark,
+  },
+  actionText: {
+    color: colors.white,
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  listTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  listCount: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  listContent: {
+    paddingBottom: 24,
+  },
+  emptyContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  emptyWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyText: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  emptySubtext: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+});
